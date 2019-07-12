@@ -7,10 +7,34 @@ const urlObj = require('url');
 const fetch = require('cross-fetch').fetch;
 require('es6-promise').polyfill();
 
+import RNFetchBlob from 'react-native-fetch-blob'
+
 const CONSTANTS = require('./constants');
 
-exports.getPreview = function(text, options) {
-  return new Promise(function(resolve, reject) {
+const Fetch = RNFetchBlob.polyfill.Fetch;
+// replace built-in fetch
+const fetchReplacement = new Fetch({
+    // enable this option so that the response data conversion handled automatically
+    auto : true,
+    // when receiving response data, the module will match its Content-Type header
+    // with strings in this array. If it contains any one of string in this array, 
+    // the response body will be considered as binary data and the data will be stored
+    // in file system instead of in memory.
+    // By default, it only store response data to file system when Content-Type 
+    // contains string `application/octet`.
+    binaryContentTypes : [
+        'image/',
+        'video/',
+        'audio/',
+        'foo/',
+    ]
+}).build();
+
+exports.getPreview = function (text, options) {
+
+   // RNFetchBlob.fetch('GET', urlLink)
+
+  return new Promise(function (resolve, reject) {
     if (!text) {
       reject({
         error: 'React-Native-Link-Preview did not receive either a url or text'
@@ -19,20 +43,44 @@ exports.getPreview = function(text, options) {
 
     var detectedUrl = null;
 
-    text.replace(/\n/g, ' ').split(' ').forEach(function(token) {
+    text.replace(/\n/g, ' ').split(' ').forEach(function (token) {
       if (CONSTANTS.REGEX_VALID_URL.test(token) && !detectedUrl) {
         detectedUrl = token;
       }
     });
 
     if (detectedUrl) {
-      fetch(detectedUrl)
-        .then(function(response) {
+      console.log("ready to fetch " + detectedUrl)
+      //RNFetchBlob.fetch('GET', detectedUrl)
+      fetchReplacement(detectedUrl)
+        .then(function (response) {
+
+          console.log("response keys in link preview = " + JSON.stringify(Object.keys(response)))
+       
+          var keys = Object.keys(response)  
+          for (var i = 0; i < keys.length; i++) {
+            console.log("key = " + keys[i] + " : " + response[keys[i]]) 
+          } 
           // get final URL (after any redirects)
-          const finalUrl = response.url;
+          const finalUrl = response.url ? response.url : detectedUrl;
 
           // get content type of response
-          var contentType = findById(response.headers, 'content-type');
+         
+          var contentType = null
+
+          if (response.headers) {
+            console.log("response.headers = " + JSON.stringify(response.headers))
+
+            if (response.headers.get)
+              contentType = response.headers.get('content-type');
+            else 
+              contentType = response.headers['content-type']
+          }
+          console.log("contentType loc 1 = " + contentType)
+
+          // this is not mime type this is like utf8 i think
+          // if (!contentType && response.type) contentType = response.type
+
           if (!contentType) {
             return reject({ error: 'React-Native-Link-Preview: Could not extract content type for URL.' });
           }
@@ -40,26 +88,36 @@ exports.getPreview = function(text, options) {
             contentType = contentType[0];
           }
 
+          console.log('ready to parse response type = ' + JSON.stringify(contentType))
+
           // parse response depending on content type
           if (contentType && CONSTANTS.REGEX_CONTENT_TYPE_IMAGE.test(contentType)) {
+            console.log("parse image")
             resolve(parseImageResponse(finalUrl, contentType));
           } else if (contentType && CONSTANTS.REGEX_CONTENT_TYPE_AUDIO.test(contentType)) {
             resolve(parseAudioResponse(finalUrl, contentType));
           } else if (contentType && CONSTANTS.REGEX_CONTENT_TYPE_VIDEO.test(contentType)) {
+            console.log("parse video")
             resolve(parseVideoResponse(finalUrl, contentType));
           } else if (contentType && CONSTANTS.REGEX_CONTENT_TYPE_TEXT.test(contentType)) {
+            console.log("parse text")
             response.text()
-              .then(function(text) {
+              .then(function (text) {
+                console.log("parse resolve text")
                 resolve(parseTextResponse(text, finalUrl, options || {}, contentType));
+                
               });
           } else if (contentType && CONSTANTS.REGEX_CONTENT_TYPE_APPLICATION.test(contentType)) {
+            console.log("final parse")
             resolve(parseApplicationResponse(finalUrl, contentType));
           } else {
+            console.log("unknown content type for url")
             reject({ error: 'React-Native-Link-Preview: Unknown content type for URL.' });
           }
         })
-        .catch(function(error) { reject({ error: error }) });
+        .catch(function (error) { console.log("ready to reject error = " + JSON.stringify(error)); reject({ error: error }) });
     } else {
+      console.log("reject 2")
       reject({
         error: 'React-Native-Link-Preview did not find a link in the text'
       });
@@ -137,7 +195,7 @@ const parseTextResponse = function (body, url, options, contentType) {
   };
 };
 
-const getTitle = function(doc) {
+const getTitle = function (doc) {
   var title = doc("meta[property='og:title']").attr('content');
 
   if (!title) {
@@ -147,7 +205,7 @@ const getTitle = function(doc) {
   return title;
 };
 
-const getDescription = function(doc) {
+const getDescription = function (doc) {
   var description = doc('meta[name=description]').attr('content');
 
   if (description === undefined) {
@@ -161,7 +219,7 @@ const getDescription = function(doc) {
   return description;
 };
 
-const getMediaType = function(doc) {
+const getMediaType = function (doc) {
   const node = doc('meta[name=medium]');
 
   if (node.length) {
@@ -172,7 +230,7 @@ const getMediaType = function(doc) {
   }
 };
 
-const getImages = function(doc, rootUrl, imagesPropertyType) {
+const getImages = function (doc, rootUrl, imagesPropertyType) {
   var images = [],
     nodes,
     src,
@@ -182,7 +240,7 @@ const getImages = function(doc, rootUrl, imagesPropertyType) {
   nodes = doc('meta[property=\'' + imagePropertyType + ':image\']');
 
   if (nodes.length) {
-    nodes.each(function(index, node) {
+    nodes.each(function (index, node) {
       src = node.attribs.content;
       if (src) {
         src = urlObj.resolve(rootUrl, src);
@@ -202,7 +260,7 @@ const getImages = function(doc, rootUrl, imagesPropertyType) {
       if (nodes.length) {
         dic = {};
         images = [];
-        nodes.each(function(index, node) {
+        nodes.each(function (index, node) {
           src = node.attribs.src;
           if (src && !dic[src]) {
             dic[src] = 1;
@@ -218,7 +276,7 @@ const getImages = function(doc, rootUrl, imagesPropertyType) {
   return images;
 };
 
-const getVideos = function(doc) {
+const getVideos = function (doc) {
   const videos = [];
   var nodeTypes;
   var nodeSecureUrls;
@@ -257,7 +315,7 @@ const getVideos = function(doc) {
         width: width,
         height: width
       };
-      if (videoType.indexOf('video/') === 0) {
+      if (videoType && videoType.indexOf('video/') === 0) {
         videos.splice(0, 0, videoObj);
       } else {
         videos.push(videoObj);
@@ -269,20 +327,20 @@ const getVideos = function(doc) {
 };
 
 // returns an array of URL's to favicon images
-const getFavicons = function(doc, rootUrl) {
+const getFavicons = function (doc, rootUrl) {
   var images = [],
     nodes = [],
     src;
 
   const relSelectors = ['rel=icon', 'rel="shortcut icon"', 'rel=apple-touch-icon'];
 
-  relSelectors.forEach(function(relSelector) {
+  relSelectors.forEach(function (relSelector) {
     // look for all icon tags
     nodes = doc('link[' + relSelector + ']');
 
     // collect all images from icon tags
     if (nodes.length) {
-      nodes.each(function(index, node) {
+      nodes.each(function (index, node) {
         src = node.attribs.href;
         if (src) {
           src = urlObj.resolve(rootUrl, src);
